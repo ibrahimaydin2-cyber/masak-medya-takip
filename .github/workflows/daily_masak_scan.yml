@@ -2,7 +2,7 @@ name: Gunluk MASAK Medya Taramasi
 
 on:
   schedule:
-    - cron: '15 13 * * *' # Her sabah 09:00 (TSİ / UTC+3)
+    - cron: '0 6 * * *' # Her sabah 09:00 (TSİ / UTC+3)
   workflow_dispatch: # İstediğin an manuel test etmek için
 
 permissions:
