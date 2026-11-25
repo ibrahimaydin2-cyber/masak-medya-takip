@@ -1,0 +1,39 @@
+name: Gunluk MASAK Medya Taramasi
+
+on:
+  schedule:
+    - cron: '0 6 * * *' # Her sabah 09:00 (TSİ / UTC+3)
+  workflow_dispatch: # İstediğin an manuel test etmek için
+
+permissions:
+  contents: write # seen_news.json dosyasını güncelleyebilmesi için
+
+jobs:
+  run-scanner:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Depoyu indir
+        uses: actions/checkout@v4
+
+      - name: Python kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Kütüphaneleri yükle
+        run: pip install -r requirements.txt
+
+      - name: Taramayı çalıştır ve mail gönder
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          RECIPIENT_EMAIL: "ibrahim.aydin2@turkcell.com.tr"
+        run: python masak_monitor.py
+
+      - name: Taranan haber hafızasını güncelle
+        run: |
+          git config --local user.email "bot@github.com"
+          git config --local user.name "MASAK Bot"
+          git add seen_news.json
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Günlük tarama kaydı güncellendi" && git push)
