@@ -20,6 +20,15 @@ GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 SEEN_FILE = "seen_news.json"
 TR_TZ = timezone(timedelta(hours=3))
 
+# Sırayla denenecek güncel Gemini modelleri
+MODEL_CANDIDATES = [
+    "gemini-2.5-flash",
+    "gemini-flash-latest",
+    "gemini-2.5-flash-lite",
+    "gemini-3-flash-preview",
+    "gemini-2.0-flash",
+]
+
 # Hedef 20 Haber Sitesi
 TARGET_DOMAINS = [
     "aa.com.tr", "dha.com.tr", "iha.com.tr", "hurriyet.com.tr", "sozcu.com.tr",
@@ -29,28 +38,18 @@ TARGET_DOMAINS = [
 ]
 
 # Paycell için Kırmızı Alarm (Yüksek Öncelik) Kategorileri
-HIGH_PRIORITY_CODES = {"SK-02", "SK-22", "SK-23", "SK-28", "SK-29", "SK-30", "SK-35", "SK-37"}
+HIGH_PRIORITY_CODES = {"SK-02", "SK-22", "SK-23", "SK-28", "SK-29", "SK-30", "SK-35", "SK-37", "KONTROL"}
 
 # 38 MASAK Kategorisini Kapsayan Gruplanmış RSS Arama Sorguları
-# (Adli tetikleyicilerle birleştirilerek gürültü azaltılır)
 SEARCH_QUERIES = [
-    # SK-01, SK-02, SK-28, SK-29, SK-30 (Ödeme Kuruluşu Kritik Riskleri)
     '("pos tefeciliği" OR "tefeci operasyonu" OR "lisanssız ödeme" OR "hesap kiralama" OR "IBAN kiralama" OR "yasa dışı fatura ödeme" OR "hawala") when:1d',
-    # SK-22 (Yasa Dışı Bahis ve Kumar)
     '("yasa dışı bahis" OR "yasadışı bahis" OR "sanal bahis" OR "bahis operasyonu" OR "7258 sayılı kanun") when:1d',
-    # SK-23, SK-35, SK-36 (Terörizmin Finansmanı, Malvarlığı Dondurma, KİS)
     '("terörizmin finansmanı" OR "terörün finansmanı" OR "mal varlığı donduruldu" OR "malvarlığı dondurma" OR "kitle imha silahı" OR "7262 sayılı kanun") when:1d',
-    # SK-37, SK-11, SK-12, SK-21, SK-26 (MASAK, Kara Para, Vergi, SPK, Bankacılık, Hileli İflas)
     '("MASAK" OR "kara para aklama" OR "suç gelirlerini aklama" OR "naylon fatura" OR "borsa manipülasyonu" OR "SPK suç duyurusu" OR "hileli iflas" OR "BDDK") when:1d',
-    # SK-10, SK-17, SK-32 (Bilişim, Dolandırıcılık, Saadet Zinciri)
     '("nitelikli dolandırıcılık" OR "siber operasyon" OR "sibergöz" OR "sazan sarmalı" OR "saadet zinciri" OR "ponzi" OR "kripto para vurgunu") when:1d',
-    # SK-13, SK-14, SK-15, SK-16, SK-24, SK-25 (Yolsuzluk, Sahtecilik, İhale, SGK, Sigorta)
     '("rüşvet operasyonu" OR "zimmet" OR "ihaleye fesat" OR "evrakta sahtecilik" OR "sahte para operasyonu" OR "sigorta dolandırıcılığı" OR "SGK dolandırıcılığı") when:1d',
-    # SK-03, SK-04, SK-05, SK-18, SK-38 (Fuhuş, Göçmen, Uyuşturucu, Organ, Müstehcenlik)
     '("uyuşturucu operasyonu" OR "göçmen kaçakçılığı" OR "insan ticareti" OR "fuhuş operasyonu" OR "organ ticareti" OR "müstehcenlik operasyonu" OR "çocuk müstehcenliği" OR "TCK 226") when:1d',
-    # SK-06, SK-07, SK-08, SK-09, SK-27, SK-31 (Kaçakçılık Türleri)
     '("silah kaçakçılığı" OR "tarihi eser kaçakçılığı" OR "gümrük kaçakçılığı" OR "hayali ihracat" OR "altın kaçakçılığı" OR "akaryakıt kaçakçılığı" OR "kaçak sigara") when:1d',
-    # SK-19, SK-20, SK-33, SK-34 (Organize Suç, Yağma, STK Suiistimali, İzinsiz Bağış)
     '("organize suç örgütü" OR "şantaj çetesi" OR "yağma çetesi" OR "dernek yolsuzluğu" OR "izinsiz yardım toplama" OR "sahte bağış") when:1d',
 ]
 
@@ -104,7 +103,6 @@ def load_seen():
 
 
 def save_seen(seen_data):
-    # Dosyanın büyümesini önlemek için son 1500 linki tut
     seen_data["urls"] = seen_data["urls"][-1500:]
     seen_data["last_run"] = datetime.now(TR_TZ).strftime("%Y-%m-%d %H:%M:%S")
     with open(SEEN_FILE, "w", encoding="utf-8") as f:
@@ -126,7 +124,6 @@ def fetch_candidate_news(seen_urls):
             link = entry.get("link", "")
             title = entry.get("title", "")
 
-            # Sadece belirlenen 20 haber sitesinden gelenleri al
             if not any(domain in source_href for domain in TARGET_DOMAINS):
                 continue
 
@@ -142,9 +139,27 @@ def fetch_candidate_news(seen_urls):
                 "published": entry.get("published", "")
             })
 
-        time.sleep(1)  # Google RSS hız limitine takılmamak için kısa bekleme
+        time.sleep(1)
 
     return candidates
+
+
+def call_gemini_with_fallback(client, prompt, preferred_model=None):
+    models_to_try = [preferred_model] if preferred_model else MODEL_CANDIDATES
+    for model_name in models_to_try:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.1,
+                ),
+            )
+            return response.text, model_name
+        except Exception as e:
+            print(f"Model {model_name} hatası: {e}")
+    return None, None
 
 
 def analyze_with_gemini(candidates):
@@ -153,8 +168,8 @@ def analyze_with_gemini(candidates):
 
     client = genai.Client(api_key=GEMINI_API_KEY)
     results = []
+    working_model = None
 
-    # Haberleri 40'arlı paketler halinde Gemini'ye analiz ettir
     batch_size = 40
     for i in range(0, len(candidates), batch_size):
         batch = candidates[i:i + batch_size]
@@ -167,7 +182,7 @@ Sen bir Ödeme ve Elektronik Para Kuruluşunda (Paycell) çalışan kıdemli MAS
 Aşağıdaki haber başlıklarını incele. Amacımız müşteri kabul (KYC) ve şüpheli işlem (ŞİB) süreçlerinde risk teşkil eden, hakkında operasyon, gözaltı, tutuklama, soruşturma, malvarlığı dondurma, adli/idari yaptırım veya ciddi suç iddiası bulunan GERÇEK veya TÜZEL kişileri tespit etmektir.
 
 ELEME KURALLARI:
-- Siyasi polemikler, genel ekonomik yorumlar, spor/magazin dedikoduları, sadece yasa tasarısı tartışmaları veya somut adli/suç vakası içermeyen genel haberleri KESİNLİKLE ELE (çıktıya dahil etme).
+- Siyasi polemikler, genel ekonomik yorumlar, spor/magazin dedikoduları veya somut adli/suç vakası içermeyen haberleri KESİNLİKLE ELE.
 - Aynı olayı anlatan birden fazla haber varsa sadece en kapsamlı olan 1 tanesini seç.
 - Sadece somut bir suç operasyonu, adli işlem, yaptırım veya kara para/suç geliri riski barındıran haberleri seç.
 
@@ -189,17 +204,26 @@ HABERLER:
 ]
 Eğer riskli haber yoksa boş liste [] döndür.
 """
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=0.1,
-            ),
-        )
+        raw_text, used_model = call_gemini_with_fallback(client, prompt, working_model)
 
+        if raw_text is None:
+            # AI erişilemezse bile aday haberleri ham olarak rapora ekle ki bildirim aksamasın
+            for orig in batch:
+                results.append({
+                    "sk_code": "KONTROL",
+                    "sk_name": "Anahtar Kelime Eşleşmesi (AI Devre Dışı)",
+                    "entities": "Başlık incelenmeli",
+                    "reason": "Gemini API anahtarı/modeli yanıt vermediği için doğrudan kelime eşleşmesiyle eklendi.",
+                    "source": orig["source"],
+                    "title": orig["title"],
+                    "link": orig["link"],
+                    "is_high_priority": True,
+                })
+            continue
+
+        working_model = used_model
         try:
-            parsed = json.loads(response.text)
+            parsed = json.loads(raw_text)
             id_map = {c["id"]: c for c in batch}
             for item in parsed:
                 orig = id_map.get(item.get("id"))
@@ -304,7 +328,6 @@ def send_email(html_content, findings_count):
     msg["To"] = RECIPIENT_EMAIL
     msg.attach(MIMEText(html_content, "html", "utf-8"))
 
-    # Gmail SMTP (Kurumsal SMTP kullanılacaksa sunucu/port buradan değiştirilebilir)
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(SMTP_USER, SMTP_PASSWORD)
         server.sendmail(SMTP_USER, RECIPIENT_EMAIL, msg.as_string())
@@ -317,12 +340,11 @@ def main():
     print(f"Toplam aday haber sayısı: {len(candidates)}")
 
     findings = analyze_with_gemini(candidates)
-    print(f"Yapay zekâ elemesi sonrası riskli haber sayısı: {len(findings)}")
+    print(f"Eleme sonrası riskli haber sayısı: {len(findings)}")
 
     html = build_email_html(findings, len(candidates))
     send_email(html, len(findings))
 
-    # Taranan linkleri kaydet ki ertesi gün tekrar gelmesin
     seen_data["urls"].extend([c["link"] for c in candidates])
     save_seen(seen_data)
 
